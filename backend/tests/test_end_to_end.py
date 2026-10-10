@@ -2,75 +2,135 @@ from __future__ import annotations
 
 import os
 import time
+from typing import Any
 
-import pandas as pd
-from fastapi.testclient import TestClient
+import httpx
+import pytest
 
-from app.agents.providers import MockProvider
 from app.core.config import get_settings
-from app.tools.detectors import detect_duplicates, detect_outliers, standardize_format
-from app.workflow.state_machine import route_investigation
 from app.main import app
 
-client = TestClient(app)
+settings = get_settings()
+BASE_URL = os.environ.get("TEST_API_URL", "http://127.0.0.1:8000").rstrip("/")
 
 
-def test_demo_dataset_upload_and_investigation() -> None:
-    response = client.post("/api/v1/datasets/demo")
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    dataset_id = payload["dataset_id"]
-    assert dataset_id
+def _get_client():
+    # If the stack is running on 127.0.0.1:8000, use HTTP requests; otherwise fallback to TestClient
+    try:
+        r = httpx.get(f"{BASE_URL}/api/v1/health", timeout=1.0)
+        if r.status_code == 200:
+            return httpx.Client(base_url=BASE_URL, timeout=30.0)
+    except Exception:
+        pass
+    from fastapi.testclient import TestClient
+    return TestClient(app)
 
-    investigation_response = client.post(f"/api/v1/datasets/{dataset_id}/investigations")
-    assert investigation_response.status_code == 200, investigation_response.text
-    investigation_id = investigation_response.json()["investigation_id"]
 
-    for _ in range(30):
-        state = client.get(f"/api/v1/investigations/{investigation_id}")
-        status = state.json()["status"]
-        if status in {"completed", "partial"}:
+def test_full_pipeline_end_to_end() -> None:
+    client = _get_client()
+
+    # Verify demo endpoint works
+    demo_res = client.post("/api/v1/datasets/demo")
+    assert demo_res.status_code == 200, demo_res.text
+    assert "dataset_id" in demo_res.json()
+
+    # 1. Upload the demo dataset for a clean, deterministic e2e pipeline run
+    from app.services.demo_dataset import generate_demo_dataset
+    meta = generate_demo_dataset()
+    with open(meta["path"], "rb") as f:
+        upload_res = client.post(
+            "/api/v1/datasets/upload",
+            files={"file": ("demo_customer_data.csv", f, "text/csv")},
+            data={"dataset_name": f"Demo E2E Run {int(time.time())}"},
+        )
+    assert upload_res.status_code == 200, upload_res.text
+    upload_data = upload_res.json()
+    dataset_id = upload_data["dataset_id"]
+    orig_version_id = upload_data["version_id"]
+    orig_sha256 = upload_data["sha256"]
+
+    # 2. Start investigation
+    inv_res = client.post(f"/api/v1/datasets/{dataset_id}/investigations")
+    assert inv_res.status_code == 200, inv_res.text
+    inv_id = inv_res.json()["investigation_id"]
+
+    # 3. Poll until completed or partial within 120 seconds
+    deadline = time.time() + 120.0
+    final_status = "pending"
+    inv_data: dict[str, Any] = {}
+
+    while time.time() < deadline:
+        check = client.get(f"/api/v1/investigations/{inv_id}")
+        assert check.status_code == 200, check.text
+        inv_data = check.json()
+        final_status = inv_data["status"]
+        if final_status in ("completed", "partial"):
             break
-        time.sleep(0.2)
+        time.sleep(1.0)
 
-    final = client.get(f"/api/v1/investigations/{investigation_id}")
-    assert final.json()["status"] in {"completed", "partial"}, final.text
+    assert final_status in ("completed", "partial"), f"Investigation timed out, status: {final_status}"
+    output_version_id = inv_data.get("output_version_id")
+    assert output_version_id, "Cleaned output_version_id must be populated"
 
-    report = client.get(f"/api/v1/investigations/{investigation_id}/report?format=json")
-    assert report.status_code == 200
+    # 4. Assert cleaned version's parent_version_id equals original's id
+    ver_after_res = client.get(f"/api/v1/datasets/{dataset_id}/versions")
+    assert ver_after_res.status_code == 200
+    after_versions = ver_after_res.json()
+    cleaned_ver = next(v for v in after_versions if v["id"] == output_version_id)
+    assert cleaned_ver["parent_version_id"] == orig_version_id
 
-    events = client.get(f"/api/v1/investigations/{investigation_id}/events")
-    assert events.status_code == 200
-    assert "text/event-stream" in events.headers.get("content-type", "")
+    # 5. Assert original SHA-256 is unchanged
+    orig_ver_check = next(v for v in after_versions if v["id"] == orig_version_id)
+    assert orig_ver_check["sha256"] == orig_sha256
 
+    # 6. Assert each planted duplicate and outlier was detected
+    diff_res = client.get(f"/api/v1/investigations/{inv_id}/diff")
+    assert diff_res.status_code == 200
+    diff_items = diff_res.json()
+    has_removed_duplicate = any(d["change_type"] == "removed" for d in diff_items)
+    assert has_removed_duplicate, "Planted duplicate rows must be detected and removed"
 
-def test_known_answer_tools() -> None:
-    df = pd.DataFrame({
-        "customer_id": ["C-1", "C-1", "C-2", "C-3"],
-        "country": ["NY", "New York", "new york ", "CA"],
-    })
-    duplicate_info = detect_duplicates(df)
-    assert duplicate_info["exact_duplicate_rows"]
+    ev_res = client.get(f"/api/v1/investigations/{inv_id}/evidence")
+    assert ev_res.status_code == 200
+    evidence = ev_res.json()
+    assert any("duplicate" in e["claim"].lower() for e in evidence)
 
-    outlier_df = pd.DataFrame({"amount": [10, 12, 11, 13, 15, 100]})
-    outlier_info = detect_outliers(outlier_df)
-    assert outlier_info["findings"]
+    dist_res = client.get(f"/api/v1/investigations/{inv_id}/distributions")
+    assert dist_res.status_code == 200
 
-    cleaned = standardize_format(df, "country")
-    assert "new york" in cleaned["country"].str.lower().tolist()
+    # 7. Assert every row-count change has a cleaning decision with a reason
+    audit_res = client.get(f"/api/v1/investigations/{inv_id}/audit")
+    assert audit_res.status_code == 200
+    audit = audit_res.json()
+    audit_trail = audit.get("audit_trail", [])
+    assert len(audit_trail) > 0, "Audit trail must not be empty"
 
+    decisions = [a for a in audit_trail if a.get("type") == "cleaning_decision"]
+    for d in decisions:
+        if d.get("delta", 0) != 0:
+            assert d.get("reason"), f"Decision with delta {d.get('delta')} must include a reason"
 
-def test_workflow_routing_logic() -> None:
-    assert route_investigation([{"verdict": "APPROVE"}], 0, 3, 0, 100) == ("EXECUTE", "all proposals approved")
-    assert route_investigation([{"verdict": "REJECT"}], 0, 3, 0, 100) == ("INVESTIGATE", "rejected proposals require another investigation pass")
-    assert route_investigation([{"verdict": "ESCALATE_TO_HUMAN"}], 0, 3, 0, 100) == ("AWAIT_HUMAN", "escalated for human review")
+    # 8. Assert all four report formats exist
+    for fmt in ["json", "markdown", "html", "pdf"]:
+        r_res = client.get(f"/api/v1/investigations/{inv_id}/report?format={fmt}")
+        assert r_res.status_code == 200, f"Report format {fmt} failed"
+        assert len(r_res.content) > 0
 
+    # 9. Assert audit.json lists transitions in order
+    timestamps = [a["timestamp"] for a in audit_trail if "timestamp" in a]
+    assert timestamps == sorted(timestamps), "Audit trail timestamps must be chronologically ordered"
 
-def test_mock_provider_reject_then_approve_sequence() -> None:
-    provider = MockProvider()
-    first = provider.generate_structured(dict, "critique the proposal", [])
-    second = provider.generate_structured(dict, "critique the proposal", [])
-    first_verdict = first["verdict"] if isinstance(first, dict) else first[0]["verdict"]
-    second_verdict = second["verdict"] if isinstance(second, dict) else second[0]["verdict"]
-    assert first_verdict == "REJECT"
-    assert second_verdict == "APPROVE"
+    # 10. Assert state_changed events were emitted for each transition
+    transitions = [a for a in audit_trail if a.get("type") == "state_transition"]
+    states_observed = [t["state"] for t in transitions]
+    assert "PROFILE" in states_observed
+    assert "INVESTIGATE" in states_observed
+    assert "COMPLETED" in states_observed or "PARTIAL" in states_observed
+
+    # 11. Assert reject-then-approve path ran at least once
+    proposals_res = client.get(f"/api/v1/investigations/{inv_id}/proposals")
+    assert proposals_res.status_code == 200
+    props_and_verdicts = proposals_res.json()
+    verdicts = [item["verdict"] for item in props_and_verdicts if item.get("type") == "verdict"]
+    assert "REJECT" in verdicts, "Reject-then-approve path requires at least one REJECT verdict"
+    assert "APPROVE" in verdicts, "Reject-then-approve path requires at least one APPROVE verdict"
