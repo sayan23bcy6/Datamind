@@ -19,6 +19,7 @@ celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
+    broker_connection_retry_on_startup=True,
     timezone="UTC",
     enable_utc=True,
     beat_schedule={
@@ -40,7 +41,11 @@ def run_investigation(investigation_id: str):
     db = SessionLocal()
     try:
         service = InvestigationService(db)
-        return service.run(investigation_id)
+        investigation = service.run(investigation_id)
+        return {
+            "investigation_id": str(investigation.id),
+            "status": investigation.status,
+        }
     finally:
         db.close()
 

@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="dev-secret-key", alias="SECRET_KEY")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
-    database_url: str = Field(default="sqlite:///./datamind.db", alias="DATABASE_URL")
+    database_url: str = Field(alias="DATABASE_URL")
     redis_url: str = Field(default="redis://127.0.0.1:6379/0", alias="REDIS_URL")
     storage_root: str = Field(default="./storage", alias="STORAGE_ROOT")
 
