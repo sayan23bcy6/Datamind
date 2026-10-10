@@ -20,12 +20,18 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
-html,
-body,
-#root {
+.dark {
+  color: #e2e8f0;
+  background-color: #020817;
+}
+
+html, body, #root {
   margin: 0;
   min-height: 100%;
   min-width: 100%;
+}
+
+.dark html, .dark body, .dark #root {
   background:
     radial-gradient(circle at top, rgba(139, 92, 246, 0.2), transparent 30%),
     radial-gradient(
@@ -34,6 +40,18 @@ body,
       transparent 30%
     ),
     #020817;
+}
+
+:not(.dark) html, :not(.dark) body, :not(.dark) #root {
+  background:
+    radial-gradient(circle at top, rgba(139, 92, 246, 0.08), transparent 30%),
+    radial-gradient(
+      circle at bottom right,
+      rgba(34, 211, 238, 0.06),
+      transparent 30%
+    ),
+    #f8fafc;
+  color: #0f172a;
 }
 
 body {
