@@ -1,30 +1,30 @@
 from functools import lru_cache
+from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     app_name: str = "DataMind"
-    app_env: str = "development"
+    app_env: str = Field(default="development", alias="APP_ENV")
     secret_key: str = Field(default="dev-secret-key", alias="SECRET_KEY")
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+
     database_url: str = Field(default="sqlite:///./datamind.db", alias="DATABASE_URL")
     redis_url: str = Field(default="redis://127.0.0.1:6379/0", alias="REDIS_URL")
     storage_root: str = Field(default="./storage", alias="STORAGE_ROOT")
-    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
-    postgres_user: str = "datamind_user"
-    postgres_password: str = "change-me"
-    postgres_db: str = "datamind"
-    google_api_key: str = "replace-me-local-only"
-    llm_provider: str = "mock"
-    gemini_model: str = "gemini-2.0-flash"
-    embedding_model: str = "text-embedding-004"
-    max_iterations: int = 3
-    cost_budget_tokens: int = 20000
-    cost_budget_tool_calls: int = 20
-    front_end_origin: str = "http://localhost:5173"
-    vite_api_url: str = "http://localhost:8000"
+    llm_provider: str = Field(default="mock", alias="LLM_PROVIDER")
+    gemini_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL")
+    google_api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
+
+    max_iterations: int = Field(default=3, alias="MAX_ITERATIONS")
+    cost_budget_tokens: int = Field(default=200000, alias="COST_BUDGET_TOKENS")
+    cost_budget_tool_calls: int = Field(default=500, alias="COST_BUDGET_TOOL_CALLS")
+
+    frontend_origin: str = Field(default="http://localhost:5173", alias="FRONTEND_ORIGIN")
+    vite_api_url: str = Field(default="http://localhost:8000", alias="VITE_API_URL")
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -33,6 +33,13 @@ class Settings(BaseSettings):
         extra="ignore",
         populate_by_name=True,
     )
+
+    @model_validator(mode="after")
+    def validate_llm_provider_credentials(self) -> "Settings":
+        if self.llm_provider and self.llm_provider.strip().lower() == "gemini":
+            if not self.google_api_key or not self.google_api_key.strip():
+                raise ValueError("GOOGLE_API_KEY is required when LLM_PROVIDER is configured to 'gemini'")
+        return self
 
 
 @lru_cache

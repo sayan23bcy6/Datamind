@@ -1,4 +1,5 @@
 from app.db.models.dataset import Dataset, DatasetVersion
+from app.db.models.embedding import Embedding
 from app.db.models.investigation import (
     AgentMessage,
     CleaningDecision,
@@ -23,4 +24,5 @@ __all__ = [
     "HumanReview",
     "InvestigationReport",
     "Watch",
+    "Embedding",
 ]
