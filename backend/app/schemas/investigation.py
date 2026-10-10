@@ -18,6 +18,10 @@ class CleaningProposal(BaseModel):
     confidence_basis: str = ""
 
 
+class ProposalList(BaseModel):
+    proposals: list[CleaningProposal] = Field(..., min_length=1)
+
+
 class CriticVerdict(BaseModel):
     proposal_id: str = Field(default="")
     verdict: Literal["APPROVE", "REJECT", "ESCALATE_TO_HUMAN"]

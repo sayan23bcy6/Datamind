@@ -204,3 +204,162 @@ def test_investigation_workflow_marks_failed_on_embedding_error():
         assert "gemini-embedding-001" in failed_inv.error
     finally:
         db.close()
+
+
+def test_mock_provider_generate_proposals_returns_at_least_one_proposal():
+    """Verify that MockProvider produces at least 1 valid CleaningProposal."""
+    from app.agents.agents import InvestigationAgent
+    from app.agents.providers import MockProvider
+
+    agent = InvestigationAgent(provider=MockProvider())
+    proposals = agent.generate_proposals({"row_count": 25, "column_count": 5, "missing_counts": {}})
+    assert len(proposals) >= 1
+    assert all(p.operation for p in proposals)
+
+
+def test_single_object_gemini_response_yields_proposal_list():
+    """Verify that a single JSON object with 'proposals' array from Gemini yields a valid list of proposals."""
+    import json
+    from app.agents.agents import InvestigationAgent
+    from app.agents.providers import GeminiProvider
+
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = json.dumps({
+        "proposals": [
+            {
+                "proposal_id": "gemini-prop-1",
+                "operation": "deduplicate",
+                "target_columns": ["customer_id"],
+                "rationale": "Exact duplicate rows found in ingestion batch.",
+                "expected_effect": "Deduplicate rows",
+                "confidence": "high",
+            }
+        ]
+    })
+    mock_client.models.generate_content.return_value = mock_resp
+
+    with patch.dict(os.environ, {"GOOGLE_API_KEY": "mock-api-key"}):
+        with patch("google.genai.Client", return_value=mock_client):
+            provider = GeminiProvider()
+            agent = InvestigationAgent(provider=provider)
+            proposals = agent.generate_proposals({"row_count": 50, "column_count": 4})
+            assert len(proposals) == 1
+            assert proposals[0].proposal_id == "gemini-prop-1"
+            assert proposals[0].operation == "deduplicate"
+
+
+def test_empty_proposals_causes_workflow_failed_not_partial():
+    """Verify that when the agent produces zero proposals, the workflow fails loudly with status 'failed'."""
+    from app.core.database import SessionLocal
+    import hashlib
+
+    db = SessionLocal()
+    try:
+        dataset_repo = DatasetRepository(db)
+        inv_repo = InvestigationRepository(db)
+
+        meta = generate_demo_dataset()
+        csv_path = Path(meta["path"])
+        file_bytes = csv_path.read_bytes()
+        digest = hashlib.sha256(file_bytes).hexdigest()
+
+        dataset = dataset_repo.create_dataset(name="Empty Proposals Test")
+        version = dataset_repo.create_version(
+            dataset_id=dataset.id,
+            source_name="demo_empty_props.csv",
+            stored_path=str(csv_path),
+            file_size_bytes=len(file_bytes),
+            sha256=digest,
+            row_count=meta["rows"],
+            column_count=meta["columns"],
+            is_original=True,
+        )
+
+        service = InvestigationService(db)
+        inv = service.create_investigation(dataset.id, version.id)
+
+        # Force provider to return an unparseable response so agent produces no proposals
+        fake_provider = MagicMock()
+        fake_provider.embed.return_value = [[0.0] * 768]
+        fake_provider.generate_structured.return_value = None
+
+        service.provider = fake_provider
+
+        with pytest.raises(Exception):
+            service.run(inv.id)
+
+        failed_inv = inv_repo.get_investigation(inv.id)
+        assert failed_inv is not None
+        assert failed_inv.status == "failed"
+        assert failed_inv.status != "partial"
+        assert failed_inv.error is not None
+        assert "no proposals" in failed_inv.error.lower() or "unsupported response" in failed_inv.error.lower()
+    finally:
+        db.close()
+
+
+def test_unparseable_critic_response_causes_workflow_failed_not_approved():
+    """Verify that unparseable critic output raises ValueError and ends workflow as 'failed', not 'approved'."""
+    from app.agents.agents import CriticAgent
+    from app.schemas.investigation import CleaningProposal
+    import hashlib
+
+    # 1. CriticAgent review() raises ValueError for unrecognized responses
+    unparseable_provider = MagicMock()
+    critic = CriticAgent(provider=unparseable_provider)
+    prop = CleaningProposal(proposal_id="test-prop", operation="deduplicate", rationale="Duplicates found")
+
+    for bad_response in [None, "unparseable string", 12345, CleaningProposal(operation="cast", rationale="foo")]:
+        unparseable_provider.generate_structured.return_value = bad_response
+        with pytest.raises(ValueError, match="Critic returned unparseable output for proposal test-prop"):
+            critic.review(prop, {})
+
+    # 2. In workflow, unparseable critic causes status 'failed'
+    from app.core.database import SessionLocal
+    db = SessionLocal()
+    try:
+        dataset_repo = DatasetRepository(db)
+        inv_repo = InvestigationRepository(db)
+
+        meta = generate_demo_dataset()
+        csv_path = Path(meta["path"])
+        file_bytes = csv_path.read_bytes()
+        digest = hashlib.sha256(file_bytes).hexdigest()
+
+        dataset = dataset_repo.create_dataset(name="Critic Failure Test")
+        version = dataset_repo.create_version(
+            dataset_id=dataset.id,
+            source_name="demo_critic_fail.csv",
+            stored_path=str(csv_path),
+            file_size_bytes=len(file_bytes),
+            sha256=digest,
+            row_count=meta["rows"],
+            column_count=meta["columns"],
+            is_original=True,
+        )
+
+        service = InvestigationService(db)
+        inv = service.create_investigation(dataset.id, version.id)
+
+        # Provider returns proposals for investigate, but unparseable object for critic
+        base_provider = MockProvider()
+        test_provider = MagicMock()
+        test_provider.embed.side_effect = base_provider.embed
+        test_provider.generate_structured.side_effect = lambda schema, prompt, tools=None: (
+            base_provider.generate_structured(schema, prompt, tools)
+            if getattr(schema, "__name__", "") == "ProposalList"
+            else "unparseable critic text"
+        )
+        service.provider = test_provider
+
+        with pytest.raises(Exception):
+            service.run(inv.id)
+
+        failed_inv = inv_repo.get_investigation(inv.id)
+        assert failed_inv is not None
+        assert failed_inv.status == "failed"
+        assert failed_inv.status != "completed"
+        assert "Critic returned unparseable output" in (failed_inv.error or "")
+    finally:
+        db.close()

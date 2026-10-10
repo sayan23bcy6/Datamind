@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -102,6 +103,8 @@ class MockProvider:
         ]
 
         if hasattr(schema, "model_validate"):
+            if getattr(schema, "__name__", "") == "ProposalList" or "proposals" in getattr(schema, "model_fields", {}):
+                return schema.model_validate({"proposals": proposals})
             if isinstance(proposals, list):
                 return [schema.model_validate(p) for p in proposals]
             return schema.model_validate(proposals)
@@ -167,11 +170,10 @@ class GeminiProvider:
             raw_text = response.text or "{}"
             data = json.loads(raw_text)
             if hasattr(schema, "model_validate"):
-                if isinstance(data, list):
-                    return [schema.model_validate(item) for item in data]
                 return schema.model_validate(data)
             return data
         except (ValidationError, Exception) as err:
+            time.sleep(1.5)
             retry_prompt = f"{prompt}\n\nNote: The previous attempt failed schema validation: {err}. Please return strictly conforming JSON."
             try:
                 retry_response = self.client.models.generate_content(
@@ -182,8 +184,6 @@ class GeminiProvider:
                 raw_text = retry_response.text or "{}"
                 data = json.loads(raw_text)
                 if hasattr(schema, "model_validate"):
-                    if isinstance(data, list):
-                        return [schema.model_validate(item) for item in data]
                     return schema.model_validate(data)
                 return data
             except Exception as retry_err:

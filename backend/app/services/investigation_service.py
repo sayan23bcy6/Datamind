@@ -287,6 +287,8 @@ class InvestigationService:
             elif current_state == "INVESTIGATE":
                 agent = InvestigationAgent(provider=self.provider)
                 raw_proposals = agent.generate_proposals(profile_dataset(cleaned_df))
+                if not raw_proposals:
+                    raise RuntimeError("Investigation agent produced no proposals")
                 current_proposals = [p.model_dump() for p in raw_proposals]
 
                 # Update token and tool budgets

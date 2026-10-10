@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.agents.providers import LLMProvider, get_provider
-from app.schemas.investigation import CleaningProposal, CriticVerdict
+from app.schemas.investigation import CleaningProposal, CriticVerdict, ProposalList
 
 
 class InvestigationAgent:
@@ -12,16 +12,28 @@ class InvestigationAgent:
 
     def generate_proposals(self, profile: dict[str, Any]) -> list[CleaningProposal]:
         prompt = (
-            "Review the profile and propose a small set of cleaning operations. "
+            "Review the profile and propose a set of cleaning operations as a JSON object with a 'proposals' array of at least one proposal. "
             f"Rows={profile.get('row_count')}, columns={profile.get('column_count')}. "
             f"Missing={profile.get('missing_counts', {})}."
         )
-        raw = self.provider.generate_structured(CleaningProposal, prompt, tools=["profile_dataset", "detect_duplicates", "detect_missing"])
-        if isinstance(raw, list):
-            return [CleaningProposal.model_validate(item) for item in raw]
-        if isinstance(raw, dict):
-            return [CleaningProposal.model_validate(raw)]
-        return []
+        raw = self.provider.generate_structured(
+            ProposalList,
+            prompt,
+            tools=["profile_dataset", "detect_duplicates", "detect_missing"],
+        )
+        if isinstance(raw, ProposalList):
+            proposals = raw.proposals
+        elif isinstance(raw, dict) and "proposals" in raw:
+            validated = ProposalList.model_validate(raw)
+            proposals = validated.proposals
+        elif isinstance(raw, list):
+            proposals = [CleaningProposal.model_validate(item) for item in raw]
+        else:
+            raise ValueError(f"Investigation agent returned unsupported response type: {type(raw).__name__}")
+
+        if not proposals:
+            raise ValueError("Investigation agent produced an empty list of proposals")
+        return proposals
 
 
 class CriticAgent:
@@ -33,9 +45,13 @@ class CriticAgent:
             "Critique the proposal against the raw tool outputs. "
             f"Proposal={proposal.model_dump_json()} Evidence={evidence}"
         )
-        raw = self.provider.generate_structured(CriticVerdict, prompt, tools=["detect_duplicates", "detect_missing", "detect_format_inconsistencies"])
-        if isinstance(raw, dict):
-            return CriticVerdict.model_validate(raw)
+        raw = self.provider.generate_structured(
+            CriticVerdict,
+            prompt,
+            tools=["detect_duplicates", "detect_missing", "detect_format_inconsistencies"],
+        )
         if isinstance(raw, CriticVerdict):
             return raw
-        return CriticVerdict(verdict="APPROVE", reasons=["No evidence of issues found."], unsupported_assumptions=[], requested_checks=[])
+        if isinstance(raw, dict):
+            return CriticVerdict.model_validate(raw)
+        raise ValueError(f"Critic returned unparseable output for proposal {proposal.proposal_id}")
