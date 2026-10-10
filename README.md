@@ -31,8 +31,22 @@ uvicorn app.main:app --reload --app-dir backend
 For the full Docker stack:
 
 ```bash
-docker compose up --build
+cp .env.example .env
+# Set POSTGRES_PASSWORD in .env before starting the services.
+docker compose up -d postgres redis
+docker compose up -d --build api worker
 ```
+
+## Running the stack
+
+```bash
+cp .env.example .env
+# Set POSTGRES_PASSWORD in .env before starting the services.
+docker compose up -d postgres redis
+docker compose up -d --build api worker
+```
+
+Health check: http://127.0.0.1:8000/health
 
 ## Architecture
 
