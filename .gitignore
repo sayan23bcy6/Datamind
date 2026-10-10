@@ -14,9 +14,10 @@ venv/
 
 # Project data
 /storage/
-uploads/
+/uploads/
 *.db
 *.sqlite3
+celerybeat-schedule*
 
 # Node
 node_modules/
@@ -26,3 +27,4 @@ frontend/.vite/
 # OS/editor
 .DS_Store
 .vscode/
+*.tsbuildinfo

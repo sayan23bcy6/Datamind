@@ -59,6 +59,25 @@ services:
       - ./backend:/app
       - ./storage:/app/storage
 
+  beat:
+    build:
+      context: ./backend
+    container_name: datamind-beat
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_ROOT: /app/storage
+    depends_on:
+      - postgres
+      - redis
+    command: celery -A app.celery_app beat --loglevel=info
+    volumes:
+      - ./backend:/app
+      - ./storage:/app/storage
+
   frontend:
     build:
       context: ./frontend
