@@ -1,6 +1,7 @@
 from app.tools.detectors import (
+    calculate_dimension_scores,
     cast_type,
-    compare_profiles,
+    compute_column_distributions,
     compute_psi,
     deduplicate,
     detect_drift,
@@ -11,14 +12,13 @@ from app.tools.detectors import (
     detect_type_errors,
     impute_column,
     profile_dataset,
-    run_chi_square,
-    run_ks_test,
     standardize_format,
     winsorize_or_flag_outliers,
 )
 
 TOOL_REGISTRY = {
     "profile_dataset": profile_dataset,
+    "calculate_dimension_scores": calculate_dimension_scores,
     "detect_missing": detect_missing,
     "detect_duplicates": detect_duplicates,
     "detect_format_inconsistencies": detect_format_inconsistencies,
@@ -30,10 +30,8 @@ TOOL_REGISTRY = {
     "deduplicate": deduplicate,
     "cast_type": cast_type,
     "winsorize_or_flag_outliers": winsorize_or_flag_outliers,
-    "run_ks_test": run_ks_test,
-    "run_chi_square": run_chi_square,
     "compute_psi": compute_psi,
-    "compare_profiles": compare_profiles,
+    "compute_column_distributions": compute_column_distributions,
 }
 
 __all__ = ["TOOL_REGISTRY"]

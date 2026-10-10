@@ -7,30 +7,20 @@ from sqlalchemy import text
 from app.api.routes.datasets import router as datasets_router
 from app.api.routes.investigations import router as investigations_router
 from app.core.config import get_settings
-from app.core.database import Base, SessionLocal, engine
-from app.db.models import (
-    AgentMessage,
-    CleaningDecision,
-    Dataset,
-    DatasetVersion,
-    Evidence,
-    HumanReview,
-    Investigation,
-    InvestigationReport,
-    ToolCall,
-    Watch,
-    WorkflowCheckpoint,
-)
+from app.core.database import SessionLocal
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    # Startup validation: verify provider configuration
+    if settings.llm_provider and settings.llm_provider.strip().lower() == "gemini":
+        if not settings.google_api_key or not settings.google_api_key.strip():
+            raise RuntimeError(
+                "GOOGLE_API_KEY is required when LLM_PROVIDER is configured to 'gemini'."
+            )
     yield
-
-Base.metadata.create_all(bind=engine)
 
 
 app = FastAPI(
@@ -40,7 +30,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-allowed_origins = [settings.front_end_origin, "http://localhost:5173", "http://127.0.0.1:5173"]
+allowed_origins = [
+    settings.frontend_origin,
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -64,7 +58,7 @@ def health_check() -> dict:
     try:
         import redis
 
-        client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+        client = redis.Redis.from_url(settings.redis_url, decode_responses=True, socket_timeout=2)
         redis_ok = bool(client.ping())
     except Exception:
         redis_ok = False

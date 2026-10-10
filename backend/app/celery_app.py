@@ -5,8 +5,8 @@ from celery import Celery
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.db.models.investigation import Watch
-from app.db.repositories.investigation_repository import InvestigationRepository
 from app.services.investigation_service import InvestigationService
+from app.services.watch_service import WatchService
 
 settings = get_settings()
 celery_app = Celery(
@@ -21,6 +21,12 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    beat_schedule={
+        "check-scheduled-watches": {
+            "task": "datamind.check_all_watches",
+            "schedule": 60.0,
+        },
+    },
 )
 
 
@@ -43,8 +49,19 @@ def run_investigation(investigation_id: str):
 def run_watch_check(watch_id: str):
     db = SessionLocal()
     try:
-        repo = InvestigationRepository(db)
-        watch = db.query(Watch).filter(Watch.id == watch_id).first()
-        return {"status": "ok", "watch_id": watch_id, "enabled": bool(watch.enabled) if watch else False}
+        service = WatchService(db)
+        return service.check_watch(watch_id)
+    finally:
+        db.close()
+
+
+@celery_app.task(name="datamind.check_all_watches")
+def check_all_watches():
+    db = SessionLocal()
+    try:
+        watches = db.query(Watch).filter(Watch.enabled == True).all()
+        for watch in watches:
+            run_watch_check.delay(watch.id)
+        return len(watches)
     finally:
         db.close()
