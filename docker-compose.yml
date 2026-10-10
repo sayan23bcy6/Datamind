@@ -1,16 +1,14 @@
-version: "3.9"
-
 services:
-  db:
+  postgres:
     image: pgvector/pgvector:pg15
-    container_name: datamind-db
+    container_name: datamind-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: datamind
-      POSTGRES_USER: datamind
-      POSTGRES_PASSWORD: datamind
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -19,7 +17,7 @@ services:
     container_name: datamind-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
 
   api:
     build:
@@ -29,14 +27,14 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://datamind:datamind@db:5432/datamind
-      REDIS_URL: redis://redis:6379/0
-      STORAGE_ROOT: /app/storage
+      DATABASE_URL: postgresql://${POSTGRES_USER}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: ${REDIS_URL}
+      STORAGE_ROOT: ${STORAGE_ROOT}
     depends_on:
-      - db
+      - postgres
       - redis
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./backend:/app
       - ./storage:/app/storage
@@ -50,11 +48,11 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://datamind:datamind@db:5432/datamind
-      REDIS_URL: redis://redis:6379/0
-      STORAGE_ROOT: /app/storage
+      DATABASE_URL: postgresql://${POSTGRES_USER}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: ${REDIS_URL}
+      STORAGE_ROOT: ${STORAGE_ROOT}
     depends_on:
-      - db
+      - postgres
       - redis
     command: celery -A app.celery_app worker --loglevel=info
     volumes:
@@ -71,7 +69,7 @@ services:
     depends_on:
       - api
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     command: npm run dev -- --host 0.0.0.0
 
 volumes:

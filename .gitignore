@@ -8,7 +8,9 @@ __pycache__/
 .venv/
 venv/
 .env
-.env.*
+.env.local
+.env.*.local
+.envrc
 
 # Project data
 storage/
