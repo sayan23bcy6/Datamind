@@ -46,6 +46,18 @@ def run_investigation(investigation_id: str):
             "investigation_id": str(investigation.id),
             "status": investigation.status,
         }
+    except Exception as exc:
+        try:
+            inv = db.query(Investigation).filter(Investigation.id == investigation_id).first()
+            if inv and inv.status != "failed":
+                inv.status = "failed"
+                inv.state = "FAILED"
+                inv.error = str(exc)
+                inv.finished_at = datetime.utcnow()
+                db.commit()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 

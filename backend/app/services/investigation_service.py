@@ -175,6 +175,54 @@ class InvestigationService:
 
         max_iter = max(1, investigation.max_iterations)
 
+        try:
+            return self._execute_run_loop(
+                investigation,
+                orig_version,
+                orig_df,
+                cleaned_df,
+                current_state,
+                current_proposals,
+                current_verdicts,
+                max_iter,
+            )
+        except Exception as exc:
+            investigation.status = "failed"
+            investigation.state = "FAILED"
+            investigation.error = str(exc)
+            investigation.finished_at = datetime.utcnow()
+            self.repo.update_investigation(
+                investigation,
+                status="failed",
+                state="FAILED",
+                error=str(exc),
+                finished_at=investigation.finished_at,
+            )
+            self.repo.add_checkpoint(investigation.id, "FAILED", investigation.iteration, {"error": str(exc)})
+            self._publish_event(
+                investigation.id,
+                "state_changed",
+                {
+                    "from": current_state,
+                    "to": "FAILED",
+                    "iteration": investigation.iteration,
+                    "timestamp": datetime.utcnow().isoformat(),
+                },
+            )
+            self._publish_event(investigation.id, "failed", {"error": str(exc)})
+            raise
+
+    def _execute_run_loop(
+        self,
+        investigation: Investigation,
+        orig_version: Any,
+        orig_df: pd.DataFrame,
+        cleaned_df: pd.DataFrame,
+        current_state: str,
+        current_proposals: list[dict[str, Any]],
+        current_verdicts: list[dict[str, Any]],
+        max_iter: int,
+    ) -> Investigation:
         while investigation.status == "running":
             # Check budgets before each cycle
             exhausted, exhaust_reason = check_budget_exhausted(
@@ -224,7 +272,7 @@ class InvestigationService:
                     self.vector_repo.upsert_embedding(
                         kind="column_profile",
                         ref_id=f"{investigation.id}:{col_info['name']}",
-                        model=self.settings.gemini_model if self.settings.llm_provider == "gemini" else "mock-768",
+                        model=self.settings.embedding_model if self.settings.llm_provider == "gemini" else "mock-768",
                         vector=vec,
                         raw_text=col_text,
                     )
@@ -639,7 +687,7 @@ class InvestigationService:
                 self.vector_repo.upsert_embedding(
                     kind="investigation_summary",
                     ref_id=investigation.id,
-                    model=self.settings.gemini_model if self.settings.llm_provider == "gemini" else "mock-768",
+                    model=self.settings.embedding_model if self.settings.llm_provider == "gemini" else "mock-768",
                     vector=summary_vec,
                     raw_text=summary_text,
                 )

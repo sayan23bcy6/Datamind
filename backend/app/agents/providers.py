@@ -26,6 +26,7 @@ class MockProvider:
     """
 
     def __init__(self, mode: str = "default") -> None:
+        self.settings = get_settings()
         self.calls = 0
         self.critique_calls = 0
         self.proposal_critiques: dict[str, int] = {}
@@ -107,18 +108,34 @@ class MockProvider:
         return proposals
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        """Return deterministic 768-dimension vectors derived from a hash of the input text."""
+        """Return deterministic vectors derived from a hash of the input text."""
+        dim = self.settings.embedding_dimension
         vectors: list[list[float]] = []
         for text in texts:
             digest = hashlib.sha256(text.encode("utf-8")).digest()
             seed = int.from_bytes(digest[:8], byteorder="big")
             rng = np.random.default_rng(seed)
-            vec = rng.standard_normal(768)
+            vec = rng.standard_normal(dim)
             norm = np.linalg.norm(vec)
             if norm > 0:
                 vec = vec / norm
             vectors.append([float(x) for x in vec])
         return vectors
+
+
+def _clean_schema_for_gemini(schema_cls: Any) -> Any:
+    if hasattr(schema_cls, "model_json_schema"):
+        raw = schema_cls.model_json_schema()
+
+        def _strip(d: Any) -> Any:
+            if isinstance(d, dict):
+                return {k: _strip(v) for k, v in d.items() if k != "additionalProperties"}
+            if isinstance(d, list):
+                return [_strip(i) for i in d]
+            return d
+
+        return _strip(raw)
+    return schema_cls
 
 
 class GeminiProvider:
@@ -138,7 +155,7 @@ class GeminiProvider:
 
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
-            response_schema=schema if hasattr(schema, "model_json_schema") else None,
+            response_schema=_clean_schema_for_gemini(schema),
         )
 
         try:
@@ -173,11 +190,40 @@ class GeminiProvider:
                 raise RuntimeError(f"Step failed schema validation after retry: {retry_err}") from retry_err
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        result = self.client.models.embed_content(
-            model="text-embedding-004",
-            contents=texts,
-        )
-        return [[float(val) for val in embedding.values] for embedding in result.embeddings]
+        from google.genai import types
+
+        model_name = self.settings.embedding_model
+        dim = self.settings.embedding_dimension
+        try:
+            result = self.client.models.embed_content(
+                model=model_name,
+                contents=texts,
+                config=types.EmbedContentConfig(output_dimensionality=dim),
+            )
+        except Exception as err:
+            err_str = str(err)
+            if "404" in err_str or "not found" in err_str.lower() or "not supported" in err_str.lower():
+                raise RuntimeError(
+                    f"Embedding model '{model_name}' was not found or is not supported for embedContent. "
+                    f"Check EMBEDDING_MODEL: {err}"
+                ) from err
+            raise
+
+        if not hasattr(result, "embeddings") or not result.embeddings:
+            raise RuntimeError(f"Embedding model '{model_name}' returned no embeddings. Check EMBEDDING_MODEL.")
+
+        vectors: list[list[float]] = []
+        for embedding in result.embeddings:
+            values = getattr(embedding, "values", None)
+            if values is None:
+                raise RuntimeError(f"Embedding model '{model_name}' returned embedding without values. Check EMBEDDING_MODEL.")
+            vec = [float(val) for val in values]
+            if len(vec) != dim:
+                raise RuntimeError(
+                    f"Returned embedding dimension {len(vec)} does not match configured EMBEDDING_DIMENSION {dim} for model '{model_name}'"
+                )
+            vectors.append(vec)
+        return vectors
 
 
 def get_provider() -> LLMProvider:

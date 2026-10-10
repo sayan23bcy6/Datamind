@@ -11,12 +11,14 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="dev-secret-key", alias="SECRET_KEY")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
-    database_url: str = Field(alias="DATABASE_URL")
+    database_url: str = Field(default="sqlite:///./datamind.db", alias="DATABASE_URL")
     redis_url: str = Field(default="redis://127.0.0.1:6379/0", alias="REDIS_URL")
     storage_root: str = Field(default="./storage", alias="STORAGE_ROOT")
 
     llm_provider: str = Field(default="mock", alias="LLM_PROVIDER")
     gemini_model: str = Field(default="gemini-2.0-flash", alias="GEMINI_MODEL")
+    embedding_model: str = Field(default="gemini-embedding-001", alias="EMBEDDING_MODEL")
+    embedding_dimension: int = Field(default=768, alias="EMBEDDING_DIMENSION")
     google_api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
 
     max_iterations: int = Field(default=3, alias="MAX_ITERATIONS")

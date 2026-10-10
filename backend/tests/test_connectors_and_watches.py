@@ -99,8 +99,12 @@ def test_watch_drift_above_and_below_threshold(tmp_path: Path) -> None:
             parent_version_id=v2.id,
         )
 
-        res_above = watch_service.check_watch(watch.id)
-        assert res_above["status"] == "investigation_created"
-        assert "investigation_id" in res_above
+        from unittest.mock import patch
+
+        with patch("app.celery_app.run_investigation.delay") as mock_delay:
+            res_above = watch_service.check_watch(watch.id)
+            assert res_above["status"] == "investigation_created"
+            assert "investigation_id" in res_above
+            mock_delay.assert_called_once()
     finally:
         db.close()
