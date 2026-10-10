@@ -23,6 +23,14 @@ class DatasetRepository:
     def get_dataset(self, dataset_id: str) -> Dataset | None:
         return self.db.query(Dataset).filter(Dataset.id == dataset_id).first()
 
+    def get_latest_version_for_dataset(self, dataset_id: str) -> DatasetVersion | None:
+        return (
+            self.db.query(DatasetVersion)
+            .filter(DatasetVersion.dataset_id == dataset_id)
+            .order_by(DatasetVersion.version_number.desc())
+            .first()
+        )
+
     def get_versions_for_dataset(self, dataset_id: str) -> List[DatasetVersion]:
         return (
             self.db.query(DatasetVersion)

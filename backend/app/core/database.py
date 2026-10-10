@@ -13,6 +13,11 @@ connect_args = {"check_same_thread": False} if settings.database_url.startswith(
 engine = create_engine(settings.database_url, connect_args=connect_args, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception:
+    pass
+
 
 def get_db():
     db = SessionLocal()

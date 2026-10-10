@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     google_api_key: str = "replace-me-local-only"
     llm_provider: str = "mock"
     gemini_model: str = "gemini-2.0-flash"
+    embedding_model: str = "text-embedding-004"
+    max_iterations: int = 3
+    cost_budget_tokens: int = 20000
+    cost_budget_tool_calls: int = 20
+    front_end_origin: str = "http://localhost:5173"
     vite_api_url: str = "http://localhost:8000"
 
     model_config = SettingsConfigDict(
